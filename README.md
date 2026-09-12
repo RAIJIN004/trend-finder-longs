@@ -1,4 +1,4 @@
-# Binance Longs (MCP Server) — LONG ONLY
+# Trend Finder Longs (MCP Server) — LONG ONLY
 
 Copia LONG-only de binance-trend-finder (sin doctrina contrarian/short).
 Doctrina: **Square + orderbook alineados a LONG + precio divergente en contra

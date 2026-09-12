@@ -20,7 +20,7 @@ from scanner import (
 from datetime import datetime
 
 mcp = FastMCP(
-    "binance-longs",
+    "trend-finder-longs",
     description="Binance LONG-ONLY scanner - long setups triggered when Square+orderbook align LONG and price diverges (pullback = setup change)"
 )
 

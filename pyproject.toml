@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "binance-longs"
+name = "trend-finder-longs"
 version = "1.0.0"
 description = "MCP server for Binance LONG-ONLY setups - Square+orderbook aligned LONG with divergent price (pullback) as setup-change trigger"
 readme = "README.md"
