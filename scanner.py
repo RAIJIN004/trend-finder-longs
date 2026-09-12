@@ -415,23 +415,34 @@ def get_intraday_momentum(symbol: str) -> dict | None:
     base_vol = sum(quote_vols[:-4]) / 13
     spike = (sum(quote_vols[-4:]) / 4) / base_vol if base_vol > 0 else 0
     green_1h = sum(1 for i in range(-4, 0) if closes[i] > closes[i - 1])
+    red_1h = sum(1 for i in range(-4, 0) if closes[i] < closes[i - 1])
     high_4h = max(highs)
+    low_4h = min(lows)
     price = closes[-1]
     dist_high = (high_4h - price) / high_4h * 100 if high_4h > 0 else 0
+    dist_low = (price - low_4h) / low_4h * 100 if low_4h > 0 else 0
     # Plan de pullback: profundidad = mitad del rango de 1h (clamp 1%-5%).
     range_1h = (max(highs[-4:]) - min(lows[-4:])) / price * 100 if price > 0 else 0
     depth = min(5.0, max(1.0, range_1h / 2))
     pullback_px = high_4h * (1 - depth / 100)
+    # Trigger de giro para DIPS: recuperar el máximo de la última hora confirma
+    # que la caída frenó. Invalidación: nuevo mínimo de 4h = thesis muerta.
+    bounce_trigger = max(closes[-4:]) * 1.002
     return {
         "chg_1h": round(chg_1h, 2),
         "chg_4h": round(chg_4h, 2),
         "vol_spike": round(spike, 1),
         "green_candles_1h": f"{green_1h}/4",
+        "red_candles_1h": f"{red_1h}/4",
         "dist_from_4h_high_pct": round(dist_high, 2),
+        "dist_from_4h_low_pct": round(dist_low, 2),
         "high_4h": high_4h,
+        "low_4h": low_4h,
         "pullback_entry": round(pullback_px, 8),
         "pullback_depth_pct": round(depth, 2),
         "invalidate_above": round(high_4h * 1.005, 8),
+        "bounce_trigger": round(bounce_trigger, 8),
+        "invalidate_below": round(low_4h * 0.995, 8),
         "price": price,
     }
 
@@ -559,21 +570,78 @@ def analyze_bullish_streak(daily_changes: list, klines: list) -> dict:
         "avg_positive_gain": avg_pos_gain
     }
 
+def analyze_red_streak(daily_changes: list, klines: list) -> dict:
+    """Espejo bajista: racha de días ROJOS consecutivos (de lo más nuevo a lo viejo).
+    Para LONGS de sobreextendida a la baja: se busca agotamiento vendedor."""
+    if not daily_changes or len(klines) < 2:
+        return {"red_streak": 0, "red_days": 0, "green_days": 0, "net_change_pct": 0}
+    red_streak = 0
+    for c in reversed(daily_changes):
+        if c < 0:
+            red_streak += 1
+        else:
+            break
+    red_days = sum(1 for c in daily_changes if c < 0)
+    green_days = sum(1 for c in daily_changes if c > 0)
+    first_open = float(klines[0][1])
+    last_close = float(klines[-1][4])
+    net_change = round(((last_close - first_open) / first_open) * 100, 2) if first_open > 0 else 0
+    return {"red_streak": red_streak, "red_days": red_days,
+            "green_days": green_days, "net_change_pct": net_change}
+
+def dip_entry_decision(red_streak: int, net_7d: float, chg_24h: float,
+                       intra: dict) -> dict:
+    """Señal LONG de sobreextendida a la baja (espejo del cazador alcista).
+    ENTER = agotamiento + giro confirmado. WAIT = agotamiento sin giro (vigilar
+    bounce_trigger). AVOID = cadáver, caída libre o dump sin estructura."""
+    chg_1h = (intra or {}).get("chg_1h", 0)
+    if chg_24h < -60 or net_7d < -70:
+        return {"entry": "AVOID", "size": "0% - descartar",
+                "reason": f"cadáver ({chg_24h:.0f}% 24h / {net_7d:+.0f}% 7d): no rebota, quiebra",
+                "bounce_plan": None}
+    if chg_1h < -1.5:
+        return {"entry": "AVOID", "size": "0% - descartar",
+                "reason": f"caída libre en la hora ({chg_1h:+.2f}%): cuchillo cayendo, no atrapar",
+                "bounce_plan": None}
+    if red_streak <= 1 and net_7d > -12:
+        return {"entry": "AVOID", "size": "0% - descartar",
+                "reason": "dump temprano sin estructura (1 día rojo, caída leve): esperar agotamiento real",
+                "bounce_plan": None}
+    bounced = chg_1h >= 0.8
+    if red_streak >= 3 and net_7d <= -12 and bounced:
+        size = "50% - mitad de tamaño" if chg_24h < -25 else "100% - tamaño completo"
+        return {"entry": "ENTER", "size": size,
+                "reason": f"agotamiento {red_streak}d rojos ({net_7d:+.1f}% 7d) + giro 1h {chg_1h:+.2f}%",
+                "bounce_plan": None}
+    why = []
+    plan = None
+    if red_streak >= 2 and net_7d <= -10 and intra:
+        why.append(f"agotamiento en curso ({red_streak}d rojos, {net_7d:+.1f}% 7d) sin giro: "
+                   f"vigilar ruptura de {intra['bounce_trigger']}")
+        plan = {
+            "bounce_trigger": intra["bounce_trigger"],
+            "low_4h": intra["low_4h"],
+            "invalidate_below": intra["invalidate_below"],
+            "note": "Orden NO aún: entrar LONG solo si el precio supera bounce_trigger "
+                    "(giro confirmado). Si pierde invalidate_below, thesis muerta.",
+        }
+    else:
+        why.append("sin agotamiento claro todavía")
+    return {"entry": "WAIT", "size": "0% - esperar", "reason": "; ".join(why),
+            "bounce_plan": plan}
+
 def scan_market(
     min_volume: float = 5_000_000,
     top_n: int = 20,
-    min_1h_pct: float = 1.5,
-    min_4h_pct: float = 2.0,
-    min_vol_spike: float = 1.0,
-    min_24h_pct: float = 0.0,
-    only_positive: bool = True,
+    max_4h_drop_pct: float = -2.0,
+    min_vol_spike: float = 1.2,
+    max_24h_pct: float = -3.0,
     include_watchlist: bool = True,
 ) -> list:
-    """HIBRIDO en 2 etapas + nivel WATCH para lista extensa:
-    1. PUERTA intradía (1 request 15m x17 por moneda): solo lo que se mueve AHORA.
-    2. RANKING por racha diaria (1 request 1d x8 solo para las que pasan):
-       consistencia primero, velocidad después. Neto 7d negativo hunde rebotes
-       de desplome al fondo. Incluye veredicto de seguridad por moneda."""
+    """DIP-HUNTER (espejo bajista del cazador alcista): sobreextendidas a la
+    baja con racha ROJA para LONGS de rebote.
+    1. PUERTA: 4h caído + spike (capitulación con volumen).
+    2. RANKING: racha roja + giro 1h (bounce). Cadáveres y caídas libres fuera."""
     tickers = get_all_usdt_tickers(min_volume)
     gated = []
 
@@ -582,27 +650,17 @@ def scan_market(
         pct_24h = float(t["priceChangePercent"])
         vol = float(t["quoteVolume"])
 
-        if only_positive and pct_24h < min_24h_pct:
-            continue
-
         intra = get_intraday_momentum(sym)
         if intra is None:
             continue
 
-        passes = True
-        if only_positive:
-            if intra["chg_1h"] < min_1h_pct:
-                passes = False
-            if intra["chg_4h"] < min_4h_pct:
-                passes = False
-        if intra["vol_spike"] < min_vol_spike:
-            passes = False
+        dumped = intra["chg_4h"] <= max_4h_drop_pct and pct_24h <= max_24h_pct
+        passes = dumped and intra["vol_spike"] >= min_vol_spike
 
         tier = "PASS" if passes else None
         if tier is None and include_watchlist:
-            # WATCH: dirección correcta pero sin pasar todo (para lista extensa)
-            if (intra["chg_1h"] >= 0.8 and intra["chg_4h"] >= 0.5
-                    and intra["vol_spike"] >= 0.7):
+            # WATCH: cayendo con volumen pero sin capitulación completa
+            if intra["chg_4h"] <= -1.0 and intra["vol_spike"] >= 0.8:
                 tier = "WATCH"
         if tier is None:
             continue
@@ -612,8 +670,8 @@ def scan_market(
         if (i + 1) % 50 == 0:
             time.sleep(0.5)
 
-    # Capar WATCH para no disparar requests: los de mejor 1h primero
-    gated.sort(key=lambda g: (0 if g[4] == "PASS" else 1, -g[3]["chg_1h"]))
+    # Capar WATCH: las más caídas primero
+    gated.sort(key=lambda g: (0 if g[4] == "PASS" else 1, g[3]["chg_4h"]))
     gated = [g for g in gated if g[4] == "PASS"] + \
             [g for g in gated if g[4] == "WATCH"][:max(top_n, 10)]
 
@@ -624,10 +682,9 @@ def scan_market(
             if len(ks) < 8:
                 continue
             daily = calc_daily_changes(ks)
-            streak = analyze_bullish_streak(daily, ks)
-            safety = safety_verdict(pct_24h, intra["dist_from_4h_high_pct"])
-            entry = entry_decision(streak["positive_streak"], streak["net_change_pct"],
-                                   pct_24h, intra, safety["verdict"])
+            red = analyze_red_streak(daily, ks)
+            entry = dip_entry_decision(red["red_streak"], red["net_change_pct"],
+                                       pct_24h, intra)
             results.append({
                 "symbol": sym,
                 "tier": tier,
@@ -635,45 +692,43 @@ def scan_market(
                 "chg_1h": intra["chg_1h"],
                 "chg_4h": intra["chg_4h"],
                 "vol_spike": intra["vol_spike"],
-                "green_candles_1h": intra["green_candles_1h"],
-                "dist_from_4h_high_pct": intra["dist_from_4h_high_pct"],
+                "red_candles_1h": intra["red_candles_1h"],
+                "dist_from_4h_low_pct": intra["dist_from_4h_low_pct"],
+                "low_4h": intra["low_4h"],
                 "pct_24h": round(pct_24h, 2),
                 "volume_24h": round(vol, 0),
-                "positive_streak_days": streak["positive_streak"],
-                "green_days_8": f"{streak['positive_days']}/8",
-                "net_7d_pct": streak["net_change_pct"],
-                "verdict": safety["verdict"],
-                "warnings": safety["reasons"],
+                "red_streak_days": red["red_streak"],
+                "red_days_8": f"{red['red_days']}/8",
+                "net_7d_pct": red["net_change_pct"],
                 "entry": entry["entry"],
                 "suggested_size": entry["size"],
                 "entry_reason": entry["reason"],
-                "wait_for_pullback": entry["wait_for_pullback"],
+                "bounce_plan": entry["bounce_plan"],
             })
         except Exception:
             continue
         time.sleep(0.03)
 
-    # Orden: tier PASS primero, luego señal de entrada, luego híbrido clásico
+    # Orden: tier PASS primero, luego señal, racha roja, giro 1h, spike
     rank = {"ENTER": 2, "WAIT": 1, "AVOID": 0}
     tier_rank = {"PASS": 1, "WATCH": 0}
     results.sort(
         key=lambda x: (tier_rank.get(x["tier"], 0), rank.get(x["entry"], 0),
-                       x["positive_streak_days"],
-                       x["chg_1h"], x["net_7d_pct"], x["vol_spike"]),
+                       x["red_streak_days"],
+                       x["chg_1h"], x["vol_spike"]),
         reverse=True
     )
     top = results[:top_n]
 
     # TODO-EN-UNO: enriquecer SOLO el top con orderbook + confluencia base
-    # + MI CUENTA (posición y órdenes vivas por moneda). Square queda neutral
-    # por defecto: la IA debe verificar square_hashtag y, si es bearish,
-    # degradar (regla en scope).
+    # + MI CUENTA. Para DIPS: orderbook volviéndose bullish mientras el precio
+    # está abajo = absorción (apoya el rebote). Book vendedor contra ENTER = veto.
     for c in top:
         ob = get_orderbook_bias(c["symbol"])
         if ob is None:
             c["orderbook"] = {"bias": "unknown", "note": "orderbook no disponible"}
             c["confluence_base"] = {"final": c["entry"], "score": "n/a",
-                                    "note": "sin orderbook: vale la señal momentum"}
+                                    "note": "sin orderbook: vale la señal dip"}
             continue
         imb = ob["imbalance"]
         ob_pts = 35 if imb >= 0.15 else (25 if imb >= 0.05 else (12 if imb > -0.05 else (5 if imb > -0.15 else 0)))
@@ -681,11 +736,11 @@ def scan_market(
         score = mom_pts + ob_pts + 12  # Square neutral = 12
         vetoes = []
         if c["entry"] == "AVOID":
-            vetoes.append("momentum AVOID")
+            vetoes.append("dip AVOID")
         if c["entry"] == "WAIT":
-            vetoes.append("momentum WAIT: falta ENTER de momentum")
+            vetoes.append("dip WAIT: falta giro confirmado")
         if ob["bias"] == "bearish" and c["entry"] == "ENTER":
-            vetoes.append(f"orderbook en contra (imb={imb})")
+            vetoes.append(f"orderbook aún vendedor (imb={imb}): sin bids que sostengan el rebote")
         if ob["spread_pct"] > 0.30:
             vetoes.append(f"spread {ob['spread_pct']}%")
         if vetoes or score < 70:
