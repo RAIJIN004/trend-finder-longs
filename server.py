@@ -32,9 +32,10 @@ def scan_long_dips(
     min_vol_spike: float = 1.2,
     max_24h_pct: float = -3.0,
     include_watchlist: bool = True,
+    market: str = "futures",
 ) -> dict:
     """
-    DIP-HUNTER TODO-EN-UNO: sobreextendidas a la BAJA con racha ROJA para LONGS
+    DIP-HUNTER TODO-EN-UNO en FUTUROS default: sobreextendidas a la BAJA con racha ROJA para LONGS
     de rebote (espejo del cazador alcista). Cada moneda trae: dip (4h/24h/spike/
     racha roja/neto7d) + señal ENTER/WAIT/AVOID + bounce_plan (trigger de giro +
     invalidación) + orderbook + confluencia + MI CUENTA.
@@ -51,6 +52,7 @@ def scan_long_dips(
         max_24h_pct: 24h at or below this % = dumped today (default: -3.0)
         include_watchlist: If True, append WATCH tier (falling, no full
             capitulation yet) for a longer list (default: True)
+        market: 'futures' (default, perps + funding) o 'spot'
 
     Returns:
         Dictionary with dip-ranked coins. ENTER = agotamiento + giro confirmado.
@@ -63,6 +65,7 @@ def scan_long_dips(
         min_vol_spike=min_vol_spike,
         max_24h_pct=max_24h_pct,
         include_watchlist=include_watchlist,
+        market=market,
     )
 
     return {
@@ -98,7 +101,7 @@ def scan_long_dips(
     }
 
 @mcp.tool()
-def get_coin_analysis(symbol: str) -> dict:
+def get_coin_analysis(symbol: str, market: str = "futures") -> dict:
     """
     Get detailed analysis of a specific coin's bullish momentum, ATR and streaks.
     
@@ -112,10 +115,10 @@ def get_coin_analysis(symbol: str) -> dict:
     if not symbol.endswith("USDT"):
         symbol += "USDT"
 
-    ticker = get_ticker_detail(symbol)
-    klines_raw = get_klines_detailed(symbol, "1d", 14)
+    ticker = get_ticker_detail(symbol, market)
+    klines_raw = get_klines_detailed(symbol, "1d", 14, market)
     klines_data = [[0, k["open"], k["high"], k["low"], k["close"]] for k in klines_raw]
-    intraday = get_intraday_momentum(symbol)
+    intraday = get_intraday_momentum(symbol, market)
 
     atr_info = calc_atr(klines_data, period=14)
     daily_changes = [k["change_pct"] for k in klines_raw[-8:]]
@@ -199,10 +202,11 @@ def list_active_pairs(min_volume: float = 10_000_000) -> dict:
 def confluence_check(
     symbol: str,
     square_bias: str = "neutral",
-    square_note: str = ""
+    square_note: str = "",
+    market: str = "futures"
 ) -> dict:
     """
-    DECISIÓN FINAL antes de operar: combina momentum + orderbook + Square con
+    DECISIÓN FINAL antes de operar: combina momentum + orderbook + funding + Square con
     reglas fijas y vetos. Esta es la ÚNICA tool que autoriza entradas.
 
     Cómo usarla (la IA debe seguir este orden):
@@ -215,6 +219,7 @@ def confluence_check(
         symbol: Par, ej. 'RAYUSDT'
         square_bias: 'bullish' | 'bearish' | 'neutral' según posts recientes de Square
         square_note: Resumen de 1 línea de lo visto en Square (ej. '3 posts whale accumulation')
+        market: 'futures' (default, +funding) o 'spot'
 
     Returns:
         Veredicto FINAL ENTER/WAIT/AVOID con score /100, traza por fuente y vetos.
@@ -223,7 +228,7 @@ def confluence_check(
     symbol = symbol.upper()
     if not symbol.endswith("USDT"):
         symbol += "USDT"
-    return confluence_decision(symbol, square_bias, square_note)
+    return confluence_decision(symbol, square_bias, square_note, market)
 
 @mcp.tool()
 def approve_trade_tool(
@@ -235,7 +240,8 @@ def approve_trade_tool(
     wallet_usdt: float,
     quantity: float,
     square_bias: str = "neutral",
-    square_note: str = ""
+    square_note: str = "",
+    market: str = "futures"
 ) -> dict:
     """
     PUERTA FINAL TODO-EN-UNO antes de abrir CUALQUIER posición. La IA debe
@@ -255,13 +261,14 @@ def approve_trade_tool(
         quantity: Cantidad en unidades base
         square_bias: 'bullish' | 'bearish' | 'neutral' (de binance-square)
         square_note: Nota de 1 línea de Square
+        market: 'futures' (default) o 'spot'
 
     Returns:
         APPROVED (luz verde matemática) o REJECTED (no abrir, con motivos).
         REJECTED no admite apelación narrativa.
     """
     return approve_trade(symbol, side, entry_price, leverage, stop_loss,
-                         wallet_usdt, quantity, square_bias, square_note)
+                         wallet_usdt, quantity, square_bias, square_note, market)
 
 @mcp.tool()
 def show_positions() -> dict:
