@@ -384,9 +384,14 @@ def confluence_decision(symbol: str, square_bias: str = "neutral",
         "symbol_warnings": problems,
         "scope": "Esta tool es la ÚNICA que autoriza entradas. El scanner solo filtra momentum; "
                  "el orderbook solo mide liquidez; Square solo mide sentimiento. "
-                 "PROHIBIDO abrir posición por 'alineación parcial' si aquí sale WAIT/AVOID.",
-        "disclaimer": "NO ES ASESORÍA FINANCIERA. Verifica por tu cuenta (DYOR): Square y "
-                      "confluencia alineados al mismo lado o no hay trade.",
+                 "PROHIBIDO abrir posición por 'alineación parcial' si aquí sale WAIT/AVOID. "
+                 "MÁXIMA PROBABILIDAD: orderbook + Square alineados con la tendencia "
+                 "sobre-extendida + precio divergente en contra = reversión a la tendencia; "
+                 "la multitud alineada es tu LIQUIDEZ.",
+        "disclaimer": "NO ES ASESORÍA FINANCIERA NI ANÁLISIS FINANCIERO. DYOR: Square y "
+                      "confluencia alineados al mismo lado o no hay trade; y la entrada "
+                      "de máxima probabilidad es la divergencia que revierte a la tendencia, "
+                      "nunca perseguir el extremo con la multitud.",
     }
 
 def calc_daily_changes(klines: list) -> list:

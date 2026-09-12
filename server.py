@@ -75,7 +75,11 @@ def scan_long_dips(
                       "propio análisis (DYOR). Setup LONG de dip: agotamiento vendedor "
                       "(racha roja + spike) + GIRO confirmado (1h verde / ruptura del "
                       "bounce_trigger) + Square/orderbook no en contra. Entrar solo el "
-                      "giro; comprar la caída libre no es setup, es atrapar cuchillos.",
+                      "giro; comprar la caída libre no es setup, es atrapar cuchillos. "
+                      "MÁXIMA PROBABILIDAD: orderbook + Square ALINEADOS con la tendencia "
+                      "sobre-extendida + precio DIVERGENTE en contra = reversión a la "
+                      "tendencia; la multitud alineada es tu LIQUIDEZ (sus stops pagan "
+                      "tu entrada con límite).",
         "filters_applied": {
             "min_volume": min_volume,
             "max_4h_drop_pct": max_4h_drop_pct,
